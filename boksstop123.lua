@@ -67,6 +67,336 @@ local WalkSpeedInput = MainTab:CreateInput({
    end,
 })
 
+-----kil
+
+
+
+-- Add Player Kill Feature to existing Main section
+local players = game:GetService("Players")
+local localPlayer = players.LocalPlayer
+local selectedPlayerToKill = nil
+local killLoop = nil
+local noclipEnabled = false
+local lastAttackTime = 0
+local attackCooldown = 1
+local evasionPattern = 1
+
+-- Weapon priority list from best to worst with base damage
+local toolPriority = {
+    "Spinel Battle Axe", "Sodalite Spike Hammer", "Serpentine Sword", "Olivine Spike Mace",
+    "Hiddenite Spear", "Fire Opal Sword", "Obsidian Sharp Bat", "Jade Knife",
+    "Titanium Spike Mace", "Topaz Scythe", "Ruby Sword", "Shell Battle Axe", "Apatite Hammer",
+    "Tanzanite Battle Axe", "Sapphire Huge Club", "Green Quartz Sword", "Meteorite Sword",
+    "Rhodonite Club", "Crystal Sledgehammer", "Gold Battle Axe", "Iron Hammer", "Amethyst Battle Axe",
+    "Turquoise Sword", "Stone Club", "Ice Knife", "Wood Club", "Rock"
+}
+
+-- Function to calculate damage based on weapon type
+local function calculateDamage(toolName)
+    local baseDamage = 5 -- Rock does 5 damage
+    local toolIndex = nil
+    
+    for index, name in ipairs(toolPriority) do
+        if name == toolName then
+            toolIndex = index
+            break
+        end
+    end
+    
+    if toolIndex then
+        local totalTools = #toolPriority
+        return 5 + (totalTools - toolIndex) * 5
+    end
+    
+    return baseDamage
+end
+
+-- Function to find the best weapon in inventory
+local function findBestWeapon()
+    local bestTool = nil
+    local bestToolIndex = #toolPriority + 1
+    
+    -- Check character first
+    for _, tool in pairs(localPlayer.Character:GetChildren()) do
+        if tool:IsA("Tool") then
+            for index, toolName in ipairs(toolPriority) do
+                if tool.Name == toolName and index < bestToolIndex then
+                    bestTool = tool
+                    bestToolIndex = index
+                    break
+                end
+            end
+        end
+    end
+    
+    -- Check backpack
+    if not bestTool then
+        for _, tool in pairs(localPlayer.Backpack:GetChildren()) do
+            if tool:IsA("Tool") then
+                for index, toolName in ipairs(toolPriority) do
+                    if tool.Name == toolName and index < bestToolIndex then
+                        bestTool = tool
+                        bestToolIndex = index
+                        break
+                    end
+                end
+            end
+        end
+    end
+    
+    return bestTool, bestToolIndex
+end
+
+-- Function to get position for hit-and-run
+local function getAttackPosition(targetRoot, pattern)
+    if not targetRoot then return nil end
+    
+    local targetCFrame = targetRoot.CFrame
+    local targetLookVector = targetCFrame.LookVector
+    
+    if pattern == 1 then
+        -- Attack from behind
+        return CFrame.new(targetCFrame.Position - (targetLookVector * 2) + Vector3.new(0, 1, 0))
+    elseif pattern == 2 then
+        -- Attack from above (high position)
+        return CFrame.new(targetCFrame.Position + Vector3.new(0, 15, 0))
+    elseif pattern == 3 then
+        -- Attack from side
+        return CFrame.new(targetCFrame.Position + (targetCFrame.RightVector * 2) + Vector3.new(0, 1, 0))
+    else
+        -- Attack from other side
+        return CFrame.new(targetCFrame.Position - (targetCFrame.RightVector * 2) + Vector3.new(0, 1, 0))
+    end
+end
+
+-- Function to get escape position (high in the air)
+local function getEscapePosition(targetRoot)
+    if not targetRoot then return nil end
+    return CFrame.new(targetRoot.Position + Vector3.new(0, 25, 0)) -- High above target
+end
+
+-- Function to kill selected player with hit-and-run tactics
+local function killPlayer()
+    if not selectedPlayerToKill or not selectedPlayerToKill.Parent then 
+        if killLoop then
+            killLoop:Disconnect()
+            killLoop = nil
+        end
+        return 
+    end
+    
+    local targetChar = selectedPlayerToKill.Character
+    local localChar = localPlayer.Character
+    
+    if not targetChar or not localChar then return end
+    
+    local targetRoot = targetChar:FindFirstChild("HumanoidRootPart")
+    local localRoot = localChar:FindFirstChild("HumanoidRootPart")
+    local targetHumanoid = targetChar:FindFirstChildOfClass("Humanoid")
+    
+    if not targetRoot or not localRoot then return end
+    
+    -- Enable noclip
+    if not noclipEnabled then
+        for _, part in pairs(localChar:GetDescendants()) do
+            if part:IsA("BasePart") then
+                part.CanCollide = false
+            end
+        end
+        noclipEnabled = true
+    end
+    
+    -- Get the best weapon
+    local bestWeapon, weaponIndex = findBestWeapon()
+    local damage = 5
+    
+    if bestWeapon then
+        damage = calculateDamage(bestWeapon.Name)
+        if bestWeapon.Parent == localPlayer.Backpack then
+            localPlayer.Character.Humanoid:EquipTool(bestWeapon)
+            wait(0.1)
+        end
+    end
+    
+    -- Get attack position (close to target)
+    local attackPosition = getAttackPosition(targetRoot, evasionPattern)
+    evasionPattern = (evasionPattern % 4) + 1
+    
+    -- Teleport to attack position
+    if attackPosition then
+        localRoot.CFrame = attackPosition
+    end
+    
+    -- Attack with weapon
+    local currentTime = tick()
+    if currentTime - lastAttackTime >= attackCooldown then
+        if bestWeapon and bestWeapon.Parent == localPlayer.Character then
+            for i = 1, 3 do
+                bestWeapon:Activate()
+                wait(0.08)
+            end
+            lastAttackTime = currentTime
+        end
+        
+        -- Apply damage directly
+        if targetHumanoid and targetHumanoid.Health > 0 then
+            targetHumanoid:TakeDamage(damage)
+            
+            -- Stun the target briefly
+            targetHumanoid:ChangeState(Enum.HumanoidStateType.Physics)
+            wait(0.05)
+            if targetHumanoid then
+                targetHumanoid:ChangeState(Enum.HumanoidStateType.GettingUp)
+            end
+        end
+        
+        -- IMMEDIATELY teleport high up after attacking (hit-and-run)
+        local escapePosition = getEscapePosition(targetRoot)
+        if escapePosition then
+            localRoot.CFrame = escapePosition
+        end
+        
+        -- Brief pause in the air
+        wait(0.5)
+    end
+end
+
+-- Get list of players
+local function getPlayerList()
+    local playerList = {}
+    for _, player in ipairs(players:GetPlayers()) do
+        if player ~= localPlayer then
+            table.insert(playerList, player.Name)
+        end
+    end
+    return playerList
+end
+
+-- Create dropdown for player selection
+local playerDropdown = MainTab:CreateDropdown({
+    Name = "Select Player to Kill",
+    Options = getPlayerList(),
+    CurrentOption = "",
+    MultipleOptions = false,
+    Flag = "PlayerKillDropdown",
+    Callback = function(selected)
+        if #selected > 0 then
+            selectedPlayerToKill = players:FindFirstChild(selected[1])
+            Rayfield:Notify({
+                Title = "Kill Feature",
+                Content = "Selected: " .. selected[1],
+                Duration = 3,
+                Image = 0,
+            })
+        else
+            selectedPlayerToKill = nil
+        end
+    end,
+})
+
+-- Create toggle for auto-kill
+local killToggle = MainTab:CreateToggle({
+    Name = "Auto Kill Selected Player",
+    CurrentValue = false,
+    Flag = "AutoKillToggle",
+    Callback = function(value)
+        if value then
+            if not selectedPlayerToKill then
+                Rayfield:Notify({
+                    Title = "Kill Feature",
+                    Content = "Please select a player first!",
+                    Duration = 3,
+                    Image = 0,
+                })
+                killToggle:Set(false)
+                return
+            end
+            
+            -- Start kill loop
+            killLoop = game:GetService("RunService").Heartbeat:Connect(function()
+                pcall(function()
+                    killPlayer()
+                end)
+            end)
+            
+            Rayfield:Notify({
+                Title = "Kill Feature",
+                Content = "Auto killing " .. selectedPlayerToKill.Name,
+                Duration = 3,
+                Image = 0,
+            })
+        else
+            -- Stop kill loop
+            if killLoop then
+                killLoop:Disconnect()
+                killLoop = nil
+            end
+            
+            -- Restore collision
+            if noclipEnabled and localPlayer.Character then
+                for _, part in pairs(localPlayer.Character:GetDescendants()) do
+                    if part:IsA("BasePart") then
+                        part.CanCollide = true
+                    end
+                end
+                noclipEnabled = false
+            end
+        end
+    end,
+})
+
+-- Create button for one-time kill
+local killButton = MainTab:CreateButton({
+    Name = "Kill Selected Player Once",
+    Callback = function()
+        if not selectedPlayerToKill then
+            Rayfield:Notify({
+                Title = "Kill Feature",
+                Content = "Please select a player first!",
+                Duration = 3,
+                Image = 0,
+            })
+            return
+        end
+        
+        pcall(function()
+            killPlayer()
+        end)
+        
+        Rayfield:Notify({
+            Title = "Kill Feature",
+            Content = "Attempted to kill " .. selectedPlayerToKill.Name,
+            Duration = 3,
+            Image = 0,
+        })
+    end,
+})
+
+-- Update player list
+players.PlayerAdded:Connect(function()
+    playerDropdown:Refresh(getPlayerList())
+end)
+
+players.PlayerRemoving:Connect(function(player)
+    playerDropdown:Refresh(getPlayerList())
+    
+    if selectedPlayerToKill and player == selectedPlayerToKill then
+        selectedPlayerToKill = nil
+        if killLoop then
+            killLoop:Disconnect()
+            killLoop = nil
+        end
+        killToggle:Set(false)
+        
+        Rayfield:Notify({
+            Title = "Kill Feature",
+            Content = player.Name .. " left the game. Killing stopped.",
+            Duration = 3,
+            Image = 0,
+        })
+    end
+end)
+
 -- JumpPower Input (created only once)
 local JumpPowerInput = MainTab:CreateInput({
    Name = "JumpPower (Normal Jump = 50)",
